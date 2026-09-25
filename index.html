@@ -173,7 +173,26 @@
   .success-icon { font-size: 3.5rem; margin-bottom: 20px; }
   .success-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 12px; color: var(--navy); }
   .success-text { color: var(--text-muted); font-size: 1rem; line-height: 1.6; }
-  .btn-pdf { margin-top: 28px; }
+  .success-actions { display: flex; justify-content: center; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+  .btn-print { background: var(--white); }
+
+  /* Druckansicht: nur die Antworten */
+  #print-report { display: none; }
+  @media print {
+    body { background: #fff; }
+    body > *:not(.container), .container > *:not(#print-report) { display: none !important; }
+    .container { max-width: none; padding: 0; }
+    #print-report { display: block; color: #16213a; font-size: 10.5pt; }
+    #print-report .pr-brand { color: #1B4FD8; font-size: 9pt; }
+    #print-report h1 { font-family: 'Playfair Display', serif; font-size: 20pt; margin: 2px 0; }
+    #print-report .pr-meta { color: #4A5568; margin-bottom: 14px; }
+    #print-report h2 { color: #1B4FD8; font-size: 10pt; letter-spacing: 0.1em; text-transform: uppercase; border-bottom: 1px solid #7d9df0; padding-bottom: 3px; margin: 16px 0 8px; break-after: avoid; }
+    #print-report .pr-item { margin-bottom: 8px; break-inside: avoid; }
+    #print-report .pr-q { font-weight: 700; }
+    #print-report .pr-a { white-space: pre-wrap; color: #333; }
+    #print-report .pr-foot { margin-top: 18px; color: #888; font-size: 8pt; }
+    @page { size: A4; margin: 16mm; }
+  }
   .btn-pdf:disabled { opacity: 0.6; cursor: wait; transform: none; }
   .req { color: var(--sapphire); margin-left: 2px; }
   .opt-lbl { color: var(--text-muted); font-weight: 400; font-size: 0.85em; margin-left: 4px; }
@@ -573,7 +592,12 @@
     <div class="success-icon">✅</div>
     <div class="success-title">Vielen Dank!</div>
     <p class="success-text">Ihre Angaben wurden erfolgreich übermittelt.<br>Wir melden uns in Kürze mit Ihrem persönlichen KI-Readout-Termin.</p>
-    <button type="button" class="btn-next btn-pdf" id="btn-pdf" onclick="downloadPdf()">Antworten als PDF herunterladen ↓</button>
+    <div class="success-actions">
+      <button type="button" class="btn-next btn-pdf" id="btn-pdf" onclick="downloadPdf()">Antworten als PDF herunterladen ↓</button>
+      <button type="button" class="btn-back btn-print" onclick="printAnswers()" title="Antworten drucken">🖨️ Drucken</button>
+    </div>
+  </div>
+  <div id="print-report">
   </div>
 
 </div>
@@ -743,8 +767,8 @@
     try {
       const res = await fetch(WEBHOOK_URL, {
         method: 'POST',
-        // Formular-Format statt JSON: kein CORS-Vorabcheck (OPTIONS) nötig
-        body: new URLSearchParams({ payload: JSON.stringify(collectAnswers()) })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(collectAnswers())
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
     } catch (err) {
@@ -798,6 +822,23 @@
       sections.push({ title: page.querySelector('.page-title').textContent.trim(), items });
     }
     return sections;
+  }
+
+  function printAnswers() {
+    const esc = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const firma = document.querySelector('[data-key="unternehmen"]').value.trim();
+    let html = '<div class="pr-brand">Breit Media · KI-Ready-Check</div>'
+      + '<h1>Fragebogen – Ihre Antworten</h1>'
+      + '<div class="pr-meta">' + esc(firma) + ' · übermittelt am ' + new Date().toLocaleDateString('de-DE') + '</div>';
+    (submittedReport || buildReport()).forEach(sec => {
+      html += '<h2>' + esc(sec.title) + '</h2>';
+      sec.items.forEach(it => {
+        html += '<div class="pr-item"><div class="pr-q">' + esc(it.q) + '</div><div class="pr-a">' + esc(it.a || '–') + '</div></div>';
+      });
+    });
+    html += '<div class="pr-foot">Breit Media GmbH · Elisabethenstraße 11, 61348 Bad Homburg</div>';
+    document.getElementById('print-report').innerHTML = html;
+    window.print();
   }
 
   function loadScript(src) {
@@ -854,7 +895,7 @@
     } catch (err) {
       console.error('PDF-Erstellung fehlgeschlagen:', err);
       showToast('Der PDF-Download ist fehlgeschlagen. Im Druckdialog können Sie „Als PDF speichern“ wählen.');
-      setTimeout(() => window.print(), 800);
+      setTimeout(printAnswers, 800);
     } finally {
       btn.disabled = false;
     }
