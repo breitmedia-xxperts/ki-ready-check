@@ -173,6 +173,8 @@
   .success-icon { font-size: 3.5rem; margin-bottom: 20px; }
   .success-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 12px; color: var(--navy); }
   .success-text { color: var(--text-muted); font-size: 1rem; line-height: 1.6; }
+  .btn-pdf { margin-top: 28px; }
+  .btn-pdf:disabled { opacity: 0.6; cursor: wait; transform: none; }
   .req { color: var(--sapphire); margin-left: 2px; }
   .opt-lbl { color: var(--text-muted); font-weight: 400; font-size: 0.85em; margin-left: 4px; }
   .acc-notes-lbl .opt-lbl { font-weight: 400; text-transform: none; letter-spacing: normal; }
@@ -571,6 +573,7 @@
     <div class="success-icon">✅</div>
     <div class="success-title">Vielen Dank!</div>
     <p class="success-text">Ihre Angaben wurden erfolgreich übermittelt.<br>Wir melden uns in Kürze mit Ihrem persönlichen KI-Readout-Termin.</p>
+    <button type="button" class="btn-next btn-pdf" id="btn-pdf" onclick="downloadPdf()">Antworten als PDF herunterladen ↓</button>
   </div>
 
 </div>
@@ -740,20 +743,121 @@
     try {
       const res = await fetch(WEBHOOK_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(collectAnswers())
+        // Formular-Format statt JSON: kein CORS-Vorabcheck (OPTIONS) nötig
+        body: new URLSearchParams({ payload: JSON.stringify(collectAnswers()) })
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
     } catch (err) {
+      console.error('Übermittlung fehlgeschlagen:', err);
       btn.disabled = false;
       btn.textContent = 'Fragebogen absenden ✓';
       showToast('Die Übermittlung ist fehlgeschlagen. Bitte versuchen Sie es erneut oder kontaktieren Sie uns.');
       return;
     }
+    submittedReport = buildReport();
     document.getElementById('page-5').classList.remove('active');
     document.getElementById('success').classList.add('active');
     document.querySelector('.stepper-wrap').style.display = 'none';
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  /* ── PDF-Download der Antworten ── */
+  let submittedReport = null;
+
+  function labelText(el) {
+    const c = el.cloneNode(true);
+    c.querySelectorAll('.req, .opt-lbl').forEach(x => x.remove());
+    return c.textContent.replace(/\s+/g, ' ').trim();
+  }
+
+  // Liest Fragen und Antworten in der Reihenfolge des Fragebogens aus
+  function buildReport() {
+    const sections = [];
+    for (let n = 1; n <= 5; n++) {
+      const page = document.getElementById('page-' + n);
+      const items = [];
+      page.querySelectorAll('[data-key]').forEach(el => {
+        const field = el.closest('.field');
+        let q = labelText(field.querySelector('label'));
+        if (el.parentElement !== field) {
+          const hint = el.previousElementSibling;
+          if (hint && hint.classList.contains('hint')) q = hint.textContent.trim();
+        }
+        items.push({ q, a: el.value.trim() });
+      });
+      const rows = [...page.querySelectorAll('.tool-row')]
+        .map(r => [r.querySelector('.tool-name').value.trim(), r.querySelector('.tool-api').value.trim()])
+        .filter(t => t[0]);
+      if (rows.length) items.push({ q: 'Tools / Software im Einsatz (API-Schnittstelle)', a: rows.map(t => '• ' + t[0] + ' – API: ' + t[1]).join('\n') });
+      page.querySelectorAll('.acc-item').forEach(item => {
+        const sel = item.querySelector('.acc-opt.selected .acc-opt-text');
+        const notes = item.querySelector('.acc-notes').value.trim();
+        items.push({ q: item.querySelector('.acc-question').textContent.trim(),
+                     a: (sel ? sel.textContent.trim() : '–') + (notes ? '\nNotizen: ' + notes : '') });
+      });
+      sections.push({ title: page.querySelector('.page-title').textContent.trim(), items });
+    }
+    return sections;
+  }
+
+  function loadScript(src) {
+    return new Promise((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = src; s.onload = ok; s.onerror = fail;
+      document.head.appendChild(s);
+    });
+  }
+
+  async function downloadPdf() {
+    const btn = document.getElementById('btn-pdf');
+    btn.disabled = true;
+    try {
+      if (!window.jspdf) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+      const doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
+      const M = 18, W = 210 - 2 * M, BOTTOM = 297 - 18;
+      let y = M;
+      const firma = document.querySelector('[data-key="unternehmen"]').value.trim();
+      const datum = new Date().toLocaleDateString('de-DE');
+      const need = h => { if (y + h > BOTTOM) { doc.addPage(); y = M; } };
+      const write = (text, size, style, color, gap) => {
+        doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(...color);
+        const lines = doc.splitTextToSize(text, W);
+        const lh = size * 0.42;
+        lines.forEach(l => { need(lh); doc.text(l, M, y); y += lh; });
+        y += gap;
+      };
+
+      write('Breit Media · KI-Ready-Check', 10, 'normal', [27, 79, 216], 1);
+      write('Fragebogen – Ihre Antworten', 18, 'bold', [10, 22, 40], 1);
+      write(firma + ' · übermittelt am ' + datum, 10, 'normal', [74, 85, 104], 6);
+
+      submittedReport.forEach(sec => {
+        need(14);
+        write(sec.title.toUpperCase(), 11, 'bold', [27, 79, 216], 1);
+        doc.setDrawColor(125, 157, 240); doc.line(M, y, M + W, y); y += 4;
+        sec.items.forEach(it => {
+          need(12);
+          write(it.q, 9.5, 'bold', [22, 33, 58], 1);
+          write(it.a || '–', 9.5, 'normal', [60, 60, 60], 4);
+        });
+        y += 2;
+      });
+
+      const pages = doc.getNumberOfPages();
+      for (let i = 1; i <= pages; i++) {
+        doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(140, 140, 140);
+        doc.text('Breit Media GmbH · Elisabethenstraße 11, 61348 Bad Homburg', M, 297 - 10);
+        doc.text('Seite ' + i + ' von ' + pages, 210 - M, 297 - 10, { align: 'right' });
+      }
+      const safe = (firma || 'Fragebogen').replace(/[^\wäöüÄÖÜß-]+/g, '_');
+      doc.save('KI-Ready-Check_' + safe + '.pdf');
+    } catch (err) {
+      console.error('PDF-Erstellung fehlgeschlagen:', err);
+      showToast('Der PDF-Download ist fehlgeschlagen. Im Druckdialog können Sie „Als PDF speichern“ wählen.');
+      setTimeout(() => window.print(), 800);
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   document.addEventListener('DOMContentLoaded', () => { addToolRow(); addToolRow(); });
